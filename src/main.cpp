@@ -1,63 +1,81 @@
+#include "Mosquitto.h"
+#include "Network.h"
+#include "Settings.h"
+#include "WebServer.h"
+#include "defaults.h"
+#include "types.h"
 #include <Arduino.h>
-#include <defaults.h>
-#include <types.h>
-#include <FS.h>
-#include <Strip/Strip.h>
-#include <Network.h>
-#include <Mosquitto.h>
-#include <Utils.h>
-#include <WebServer.h>
+#include <MQTT.h>
 
-Strip* strip;
+WiFiClient net;
 
-bool mqttAtInit = false;
+volatile byte pulseCount = 0;
+volatile bool canCount = false;
+volatile unsigned long last_pulse_t = 0;
+volatile bool ready = false;
 
 void messageHandler(String cmd, String payload) {
   Serial.print("|CMD: " + cmd + " |");
   Serial.print("|Payload:" + payload + " |");
   Serial.println("");
 
-  strip->cmd(cmd, payload);
+  // Add something for ringing ?
 }
 
-void setup ( void ) {
-  Utils::initStorage();
-  
-  delay(3000);
-  Serial.begin(115200);  
-  Serial.println("wtf strip");
+void ICACHE_RAM_ATTR PULSE_ISR() {
+  noInterrupts();
+  unsigned long duration = millis() - last_pulse_t;
+  last_pulse_t = millis();
 
-  if (!isnan(Utils::settings.strip_size) && Utils::settings.strip_size < MAX_LENGTH ) {
-    strip = new Strip(Utils::settings.strip_size);
-  } else {
-    strip = new Strip(1);
+  if (duration < PULSE_WINDOW_MAX && duration > PULSE_WINDOW_MIN) {
+    pulseCount++;
   }
-    
-  digitalWrite(2, HIGH); // turn off device led
 
-  SPIFFS.begin(); // TODO replace with littleFS
-  
-  Network::init(Utils::settings.ssid, Utils::settings.pass);
+  ready = true;
+  interrupts();
+}
 
-  if (Network::getMode() == Network::MODES::ST)
-    mqttAtInit = Mosquitto::init(Utils::settings.broker, Utils::settings.topic, messageHandler);
-  
+void setup(void) {
+  Serial.begin(115200);
+  Settings::init();
+
+  Network::init(Settings::settings.ssid, Settings::settings.pass);
+
+  if (Network::getMode() == Network::MODES::ST) {
+    Mosquitto::init(Settings::settings.broker, Settings::settings.topic, messageHandler);
+  }
+
   WebServer::init(messageHandler);
- 
-  strip->test();
+  analogWriteFreq(440);
+  analogWrite(INT_PIN_TONE, 50);
+  pinMode(INT_PIN_PULSE, INPUT);
+  attachInterrupt(digitalPinToInterrupt(INT_PIN_PULSE), PULSE_ISR, FALLING);
 }
 
-void loop ( void ) {
-  yield();
+inline void processTone() {
+  if (ready && millis() > (DIAL_WINDOW_LIMIT + last_pulse_t)) {
+    Serial.print("New input value ");
+    Serial.println(pulseCount);
+    // Make programmable messages (programmable via setup)
+
+    Mosquitto::send(Settings::settings.topic, String(pulseCount).c_str());
+
+    last_pulse_t = 0;
+    pulseCount = 0;
+    ready = false;
+  }
+}
+
+void loop() {
   Network::checkAlive();
-  
-  if ( !Mosquitto::connected() && mqttAtInit)  {
-    // try to reconnect only if we could connect during setup
-    Mosquitto::init(Utils::settings.broker, Utils::settings.topic, messageHandler);
-  } else {
-    Mosquitto::loop();
-    WebServer::loop();
+
+  if (!Mosquitto::connected()) {
+    Mosquitto::init(Settings::settings.broker, Settings::settings.topic, messageHandler);
   }
 
-  strip->loop();
+  WebServer::loop();
+  Mosquitto::loop();
+
+  processTone();
+  delay(100);
 }

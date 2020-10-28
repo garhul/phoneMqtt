@@ -5,13 +5,13 @@
 #include <WiFiClient.h>
 #include <Hash.h>
 #include <types.h>
-#include <Utils.h>
+#include <Settings.h>
 
-#define AP_SSID "aurora_"
+#define AP_SSID "Phone_"
 #define AP_USE_PWD false
 #define AP_PWD "1234"
-#define AP_DEVICE_NAME "aurora_"
-#define ST_DEVICE_NAME "aurora"
+#define AP_DEVICE_NAME "phoneMqtt_"
+#define ST_DEVICE_NAME "phoneMqtt"
 #define ST_CONN_TIMEOUT 10000
 #define ST_RETRIES 3
 
